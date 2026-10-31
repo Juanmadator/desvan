@@ -6,3 +6,4 @@ testdata/*.bin
 *.log
 captures/tmp/
 testdata/*.json
+captures/

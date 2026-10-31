@@ -155,6 +155,7 @@ export const api = {
   dupesStart: (id: number, minSize = 1 << 20) => invoke<void>("dupes_start", { id, minSize }),
   dupesCancel: () => invoke<void>("dupes_cancel"),
   delete: (ids: number[]) => invoke<{ deleted: number[]; freed: number; root_alloc: number }>("delete", { ids }),
+  undoDelete: () => invoke<{ restored: number; failed: string[]; root_alloc: number }>("undo_delete"),
   reveal: (id: number) => invoke<void>("reveal", { id }),
   openPath: (id: number) => invoke<void>("open_path", { id }),
 };

@@ -14,8 +14,27 @@ pub struct ScanData {
     pub lower: std::sync::OnceLock<Vec<u8>>,
 }
 
+/// Lo necesario para deshacer un envío a la Papelera.
+pub struct UndoEntry {
+    pub when: i64,
+    /// Por cada nodo borrado: (nodo, alloc, size, files, dirs, cuenta en totales, valores guardados del subárbol)
+    pub items: Vec<UndoItem>,
+}
+
+pub struct UndoItem {
+    pub id: u32,
+    pub path: String,
+    pub alloc: u64,
+    pub size: u64,
+    pub files: u32,
+    pub dirs: u32,
+    pub counts: bool,
+    pub saved: Vec<(u32, u64, u64, u32, u16)>,
+}
+
 #[derive(Default)]
 pub struct AppState {
+    pub undo: Mutex<Vec<UndoEntry>>,
     pub current: RwLock<Option<Arc<ScanData>>>,
     pub progress: Mutex<Option<Arc<Progress>>>,
     pub next_id: Mutex<u32>,

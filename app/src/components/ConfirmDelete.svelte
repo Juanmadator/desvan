@@ -13,7 +13,7 @@
     try {
       const r = await app.remove(p.ids);
       app.pendingDelete = null;
-      app.notify(`Enviado a la Papelera: ${bytes(r.freed)} liberados`);
+      app.notify(`Enviado a la Papelera: ${bytes(r.freed)}`, { label: "Deshacer", run: () => void app.undo() });
     } catch (e) {
       error = String(e);
     } finally {

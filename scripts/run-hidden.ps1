@@ -46,6 +46,8 @@ public static class Oculto {
 
 if ($DebugPort -gt 0) {
   $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$DebugPort"
+  # carpeta de datos propia: si la app instalada está abierta, WebView2 reutilizaría su proceso
+  $env:DESVAN_WEBVIEW_DATA = Join-Path $env:TEMP "desvan-webview-pruebas-$DebugPort"
 }
 $pi = [Oculto]::Start($Desktop, (Resolve-Path $Exe).Path, $Arguments)
 [Console]::Out.WriteLine($pi.dwProcessId)

@@ -23,6 +23,8 @@ class AppStore {
   version = $state(0);
   error = $state<string | null>(null);
   toast = $state<string | null>(null);
+  /** Acción opcional del aviso (p. ej. «Deshacer») */
+  toastAction = $state<{ label: string; run: () => void } | null>(null);
   /** Categoría resaltada en el mapa (desde la pestaña Tipos) */
   highlightCat = $state<number | null>(null);
   /** Pestaña del panel derecho */
@@ -144,10 +146,29 @@ class AppStore {
     await this.select(id);
   }
 
-  notify(msg: string) {
+  notify(msg: string, action: { label: string; run: () => void } | null = null) {
     this.toast = msg;
+    this.toastAction = action;
     clearTimeout(this.toastTimer);
-    this.toastTimer = window.setTimeout(() => (this.toast = null), 3500);
+    this.toastTimer = window.setTimeout(() => {
+      this.toast = null;
+      this.toastAction = null;
+    }, action ? 9000 : 3500);
+  }
+
+  /** Saca de la Papelera lo último que se borró desde Desván. */
+  async undo() {
+    this.toast = null;
+    this.toastAction = null;
+    try {
+      const r = await api.undoDelete();
+      if (this.summary) this.summary = { ...this.summary, alloc: r.root_alloc };
+      this.version++;
+      if (r.failed.length) this.notify(`Restaurado a medias: ${r.failed[0]}`);
+      else this.notify(r.restored === 1 ? "Restaurado desde la Papelera" : `${r.restored} elementos restaurados desde la Papelera`);
+    } catch (e) {
+      this.notify(`No se pudo deshacer: ${e}`);
+    }
   }
 
   backHome() {

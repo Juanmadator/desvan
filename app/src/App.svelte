@@ -19,7 +19,12 @@
 {/if}
 
 {#if app.toast}
-  <div class="toast" role="status">{app.toast}</div>
+  <div class="toast" role="status">
+    <span>{app.toast}</span>
+    {#if app.toastAction}
+      <button class="act" onclick={() => app.toastAction?.run()}>{app.toastAction.label}</button>
+    {/if}
+  </div>
 {/if}
 
 <style>
@@ -35,6 +40,19 @@
     box-shadow: var(--shadow);
     z-index: 100;
     animation: up 0.2s ease-out;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .act {
+    background: none;
+    border: 0;
+    color: var(--accent-2);
+    font-weight: 600;
+    padding: 2px 4px;
+  }
+  .act:hover {
+    text-decoration: underline;
   }
   @keyframes up {
     from {

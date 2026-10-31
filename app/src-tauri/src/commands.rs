@@ -491,10 +491,12 @@ pub fn delete(state: State<'_, AppState>, ids: Vec<u32>) -> Res<DeleteResult> {
         ids.iter().map(|&n| t.path(n, &s.root_path)).collect()
     };
     desvan_core::win::recycle(&paths)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let mut s = d.scan.write().unwrap();
     let t = &mut s.tree;
     let mut freed = 0;
-    for &id in &ids {
+    let mut items = Vec::new();
+    for (&id, path) in ids.iter().zip(paths.iter()) {
         let i = id as usize;
         if t.flags[i] & flags::DELETED != 0 {
             continue;
@@ -512,20 +514,71 @@ pub fn delete(state: State<'_, AppState>, ids: Vec<u32>) -> Res<DeleteResult> {
             t.dirs[pi] -= dd.min(t.dirs[pi]);
             p = t.parent[pi];
         }
-        // el nodo y su contenido quedan a cero (la interfaz los oculta)
+        // el nodo y su contenido quedan a cero (la interfaz los oculta); se guarda para deshacer
+        let mut saved = Vec::new();
         for n in subtree(t, id) {
             let k = n as usize;
+            saved.push((n, t.alloc[k], t.size[k], t.files[k], t.flags[k]));
             t.alloc[k] = 0;
             t.size[k] = 0;
             t.files[k] = 0;
             t.flags[k] |= flags::DELETED;
         }
+        items.push(crate::state::UndoItem { id, path: path.clone(), alloc: a, size: z, files: f, dirs: dd, counts, saved });
         if counts {
             freed += a;
         }
     }
+    state.undo.lock().unwrap().push(crate::state::UndoEntry { when: now, items });
     let root_alloc = t.alloc[t.root as usize];
     Ok(DeleteResult { deleted: ids, freed, root_alloc })
+}
+
+#[derive(Serialize)]
+pub struct UndoResult {
+    restored: usize,
+    failed: Vec<String>,
+    root_alloc: u64,
+}
+
+/// Saca de la Papelera lo último que se envió desde Desván y lo vuelve a contar en el árbol.
+#[tauri::command(async)]
+pub fn undo_delete(state: State<'_, AppState>) -> Res<UndoResult> {
+    let d = state.current()?;
+    let entry = state.undo.lock().unwrap().pop().ok_or("no hay nada que deshacer")?;
+    let paths: Vec<String> = entry.items.iter().map(|i| i.path.clone()).collect();
+    let results = desvan_core::win::restore(&paths, entry.when);
+    let mut s = d.scan.write().unwrap();
+    let t = &mut s.tree;
+    let mut restored = 0;
+    let mut failed = Vec::new();
+    for (item, r) in entry.items.iter().zip(results) {
+        if let Err(e) = r {
+            failed.push(e);
+            continue;
+        }
+        restored += 1;
+        for &(n, a, z, f, fl) in &item.saved {
+            let k = n as usize;
+            t.alloc[k] = a;
+            t.size[k] = z;
+            t.files[k] = f;
+            t.flags[k] = fl;
+        }
+        let mut p = t.parent[item.id as usize];
+        while p != NONE {
+            let pi = p as usize;
+            if item.counts {
+                t.alloc[pi] += item.alloc;
+                t.size[pi] += item.size;
+            }
+            t.files[pi] += item.files;
+            t.dirs[pi] += item.dirs;
+            p = t.parent[pi];
+        }
+    }
+    let root_alloc = t.alloc[t.root as usize];
+    Ok(UndoResult { restored, failed, root_alloc })
 }
 
 #[tauri::command]

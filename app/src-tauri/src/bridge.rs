@@ -19,7 +19,7 @@ pub fn layout_bytes(t: &Tree, id: NodeId, w: f32, h: f32, metric: Option<&str>, 
     let h = h.clamp(1.0, 16384.0);
     let lay = layout::layout(t, id, w, h, &opts);
     let mut out = lay.to_bytes(w, h);
-    let cands: Vec<u32> = lay.label_candidates(48.0, 18.0).into_iter().filter(|&i| lay.flags(i as usize) & layout::rflags::REST == 0).collect();
+    let cands: Vec<u32> = lay.label_candidates(52.0, 22.0).into_iter().filter(|&i| lay.flags(i as usize) & layout::rflags::REST == 0).collect();
     out.extend_from_slice(&(cands.len() as u32).to_le_bytes());
     for i in cands {
         let node = lay.ids[i as usize];
