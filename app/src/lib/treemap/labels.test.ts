@@ -15,6 +15,11 @@ describe("ellipsize", () => {
     expect(mono(r)).toBeLessThanOrEqual(60);
     expect(r.endsWith("…")).toBe(true);
   });
+  it("no deja signos sueltos antes de los puntos", () => {
+    expect(ellipsize("C0078.MP4", 49, mono, "middle")).toBe("C0078…");
+    expect(ellipsize("2026-03-14 21-33", 42, mono)).toBe("2026…");
+    expect(ellipsize("2026-03-14 21-33", 49, mono)).toBe("2026-0…");
+  });
   it("en medio conserva la extensión", () => {
     const r = ellipsize("Grabación 2026-03-14 21-33-07.mkv", 140, mono, "middle")!;
     expect(r).toBe("Grabación 202…07.mkv");

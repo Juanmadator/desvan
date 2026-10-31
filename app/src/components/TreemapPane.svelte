@@ -8,7 +8,7 @@
 
   let { oncontext }: { oncontext?: (e: MouseEvent, row: Row) => void } = $props();
 
-  let host: HTMLDivElement;
+  let host = $state<HTMLDivElement>();
   let canvas: HTMLCanvasElement;
   let view: TreemapView | null = null;
   let current: DecodedLayout | null = null;
@@ -79,7 +79,7 @@
       tip = null;
       return;
     }
-    const rect = host.getBoundingClientRect();
+    const rect = host!.getBoundingClientRect();
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
     const known = labels.get(hit.index);

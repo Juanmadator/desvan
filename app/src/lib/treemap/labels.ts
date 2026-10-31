@@ -27,14 +27,16 @@ export function ellipsize(text: string, max: number, measure: Measure, mode: "en
   const n = chars.length;
   const ext = mode === "middle" ? extOf(text) : "";
   const extLen = Array.from(ext).length;
+  // sin espacios ni signos sueltos antes de los puntos: «C0078…», no «C0078.…»
+  const clean = (s: string) => s.replace(/[\s.,;:_\-–—·]+$/u, "");
   const build = (k: number): string => {
     // k = caracteres conservados
     if (mode === "middle" && k >= extLen + 4) {
       const tail = Math.min(k - 2, extLen + 2);
       const head = k - tail;
-      return chars.slice(0, head).join("").trimEnd() + ELLIPSIS + chars.slice(n - tail).join("");
+      return clean(chars.slice(0, head).join("")) + ELLIPSIS + chars.slice(n - tail).join("");
     }
-    return chars.slice(0, k).join("").trimEnd() + ELLIPSIS;
+    return clean(chars.slice(0, k).join("")) + ELLIPSIS;
   };
   let lo = minChars;
   let hi = n - 1;

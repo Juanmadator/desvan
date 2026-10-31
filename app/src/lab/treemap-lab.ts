@@ -315,6 +315,7 @@ async function main() {
       if (f & RFLAG.REST && p >= 0 && (flagsOf(p) & RFLAG.HEADER) === 0 && (flagsOf(p) & RFLAG.CHAIN) === 0) {
         return { name: cur.side.names[p], detail: name };
       }
+      if (f & RFLAG.REST) return { name, short: nf.format(cur.side.counts[i]), detail: bytes(cur.side.sizes[i]) };
       return { name, detail: bytes(cur.side.sizes[i]) };
     },
     onHover: (hit, ev) => showTip(hit, ev),

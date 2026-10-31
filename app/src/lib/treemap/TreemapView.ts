@@ -20,6 +20,8 @@ export interface TreemapHit {
 
 export interface TreemapLabel {
   name: string;
+  /** Alternativa corta si `name` no cabe entera (p. ej. «29.721» por «29.721 elementos»). */
+  short?: string;
   /** Segunda línea o texto a la derecha de la franja (p. ej. el tamaño). */
   detail?: string;
 }
@@ -143,6 +145,7 @@ export class TreemapView {
   private labelsDirty = true;
   private raf = 0;
   private hoverRaf = 0;
+  private pendingTimer = 0;
   private lastPointer: { x: number; y: number; ev: MouseEvent } | null = null;
   private lost = false;
   private disposed = false;
@@ -223,6 +226,7 @@ export class TreemapView {
     const now = performance.now();
     const p = this.pending;
     this.pending = null;
+    clearTimeout(this.pendingTimer);
     if (p) {
       // la imagen anterior (la del zoom o la vista de la que se sube) pasa a «prev»
       this.cur = 1 - this.cur;
@@ -312,6 +316,7 @@ export class TreemapView {
     }
     // sin animación de entrada: fundido al llegar los datos
     this.pending = fromRect ? { kind: "in" } : { kind: "out", from: this.meta.root };
+    this.armPendingTimeout();
     this.request();
     then();
   }
@@ -399,6 +404,7 @@ export class TreemapView {
     this.disposed = true;
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.hoverRaf) cancelAnimationFrame(this.hoverRaf);
+    clearTimeout(this.pendingTimer);
     this.observer?.disconnect();
     this.mql?.removeEventListener("change", this.onDprChange);
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);
@@ -529,6 +535,18 @@ export class TreemapView {
     if (!this.raf && !this.disposed) this.raf = requestAnimationFrame(this.frame);
   }
 
+  /** Si `then` nunca llama a setData, la vista vuelve a su estado normal a los 4 s. */
+  private armPendingTimeout(): void {
+    clearTimeout(this.pendingTimer);
+    this.pendingTimer = window.setTimeout(() => {
+      if (!this.pending || this.disposed) return;
+      this.pending = null;
+      this.baseDirty = true;
+      this.labelsDirty = true;
+      this.request();
+    }, 4000);
+  }
+
   private startFade(now: number, dur: number): void {
     this.fadeStart = now;
     this.fadeDur = dur;
@@ -605,6 +623,7 @@ export class TreemapView {
     if (finishedIn) {
       // la carpeta ya llena la vista: ahora los datos nuevos
       this.pending = { kind: "in" };
+      this.armPendingTimeout();
       const then = finishedIn.then;
       if (then) then();
     }
@@ -787,7 +806,10 @@ export class TreemapView {
     const isFile = (flags & (RFLAG.DIR | RFLAG.REST)) === 0;
     const mName = (t: string) => this.measure(nameFont, t);
     // un nombre recortado a 3 o 4 letras no dice nada: mejor sin etiqueta
-    const name = ellipsize(lab.name, s.w, mName, isFile ? "middle" : "end", isFile ? 6 : 5);
+    const name =
+      mName(lab.name) > s.w && lab.short && mName(lab.short) <= s.w
+        ? lab.short
+        : ellipsize(lab.name, s.w, mName, isFile ? "middle" : "end", isFile ? 6 : 5);
     if (!name) return;
     const two = !!lab.detail && s.h >= 36;
     const cx = s.x + s.w / 2;
