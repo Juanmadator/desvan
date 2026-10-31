@@ -1,0 +1,8 @@
+target/
+node_modules/
+dist/
+testdata/*.img
+testdata/*.bin
+*.log
+captures/tmp/
+testdata/*.json

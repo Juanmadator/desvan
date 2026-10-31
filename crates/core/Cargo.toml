@@ -1,0 +1,19 @@
+[package]
+name = "desvan-core"
+description = "Núcleo de Desván: lector de la MFT de NTFS, recorrido paralelo, árbol compacto, treemap y duplicados"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rayon.workspace = true
+crossbeam-channel.workspace = true
+xxhash-rust.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

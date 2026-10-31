@@ -1,0 +1,15 @@
+[package]
+name = "desvan-cli"
+description = "Herramienta de línea de comandos de Desván (escaneo, medición y pruebas)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "desvan"
+path = "src/main.rs"
+
+[dependencies]
+desvan-core = { path = "../core" }
+anyhow.workspace = true
+serde_json.workspace = true
