@@ -12,13 +12,20 @@ const out = outIdx >= 0 ? args[outIdx + 1] : "captures/app";
 const scanIdx = args.indexOf("--scan");
 const scanTarget = scanIdx >= 0 ? args[scanIdx + 1] : null;
 const port = 9333;
+const admin = args.includes("--admin");
 mkdirSync(out, { recursive: true });
+const abs = (p) => (p.includes(":") ? p : `${process.cwd()}/${p}`).replaceAll("/", "\\");
 
 // el lanzador se queda vivo mientras dure la app (mantiene el escritorio oculto)
-const launcher = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/run-hidden.ps1", "-Exe", exe, "-DebugPort", String(port)], {
+// con --admin se lanza elevado (en equipos con UAC silencioso no pregunta nada)
+if (admin) {
+  const inner = `Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${abs("scripts/run-hidden.ps1")}','-Exe','${abs(exe)}','-DebugPort','${port}'`;
+  execFileSync("powershell", ["-NoProfile", "-Command", inner]);
+}
+const launcher = admin ? null : spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/run-hidden.ps1", "-Exe", exe, "-DebugPort", String(port)], {
   stdio: ["ignore", "pipe", "inherit"],
 });
-const pid = await new Promise((resolve, reject) => {
+const pid = admin ? "elevado" : await new Promise((resolve, reject) => {
   let buf = "";
   launcher.stdout.on("data", (d) => {
     buf += d;
@@ -30,7 +37,8 @@ const pid = await new Promise((resolve, reject) => {
 console.log("app pid", pid);
 const kill = () => {
   try {
-    execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+    if (admin) execFileSync("powershell", ["-NoProfile", "-Command", "Start-Process taskkill -Verb RunAs -WindowStyle Hidden -ArgumentList '/IM','desvan-app.exe','/F'"], { stdio: "ignore" });
+    else execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
   } catch {}
 };
 process.on("exit", kill);

@@ -8,9 +8,12 @@ pub mod dupes;
 pub mod junk;
 pub mod layout;
 pub mod ntfs;
+pub mod snapshot;
 pub mod tree;
 pub mod util;
 pub mod walk;
+#[cfg(windows)]
+pub mod helper;
 #[cfg(windows)]
 pub mod win;
 
@@ -30,7 +33,7 @@ pub enum Method {
     Walk,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize)]
 pub struct ScanStats {
     pub elapsed_ms: u64,
     /// Tiempo leyendo del disco (solo MFT).
@@ -50,7 +53,7 @@ pub struct ScanStats {
 }
 
 /// Información del volumen escaneado.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize)]
 pub struct VolumeInfo {
     pub total: u64,
     pub free: u64,

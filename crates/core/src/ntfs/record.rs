@@ -6,6 +6,10 @@ pub const ATTR_FILE_NAME: u32 = 0x30;
 pub const ATTR_DATA: u32 = 0x80;
 pub const ATTR_INDEX_ALLOCATION: u32 = 0xA0;
 pub const ATTR_BITMAP: u32 = 0xB0;
+pub const ATTR_REPARSE_POINT: u32 = 0xC0;
+/// Bit de las etiquetas de reparse que son «sustitutos de nombre» (uniones, enlaces simbólicos):
+/// las únicas que apuntan a otro sitio. OneDrive, WOF o la deduplicación no lo llevan.
+pub const REPARSE_NAME_SURROGATE: u32 = 0x2000_0000;
 pub const ATTR_END: u32 = 0xFFFF_FFFF;
 
 pub const REC_IN_USE: u16 = 0x0001;
@@ -97,6 +101,8 @@ pub struct RecordInfo {
     pub named_streams: u32,
     /// Asignación del índice del directorio ($I30).
     pub index_alloc: u64,
+    /// Etiqueta del punto de reparse, si lo hay y es residente.
+    pub reparse_tag: Option<u32>,
     pub names_len: usize,
     pub names: [Option<NameRef>; 8],
     /// Más de 8 nombres (muy raro): los demás se pierden.
@@ -236,6 +242,12 @@ pub fn parse(rec: &[u8], cluster: u64) -> RecordInfo {
             }
             ATTR_INDEX_ALLOCATION if non_resident && len >= 0x40 && u64le(a, 0x10) == 0 => {
                 info.index_alloc += u64le(a, 0x28);
+            }
+            ATTR_REPARSE_POINT if !non_resident && len >= 0x18 => {
+                let vo = u16le(a, 0x14) as usize;
+                if vo + 4 <= a.len() {
+                    info.reparse_tag = Some(u32le(a, vo));
+                }
             }
             _ => {}
         }
@@ -486,6 +498,18 @@ pub(crate) mod tests {
         let mut later = RecBuilder::new(1024, REC_IN_USE, 1234).nonresident(ATTR_DATA, "", 2, 0, 0, 0, None, &[0x11, 2, 0x50, 0]).finish(2);
         assert!(apply_fixups(&mut later));
         assert_eq!(parse(&later, 4096).data, None);
+    }
+
+    #[test]
+    fn reparse_tags() {
+        // unión (sustituto de nombre) y marcador de OneDrive (no lo es)
+        let mut junction = RecBuilder::new(1024, REC_IN_USE | REC_DIRECTORY, 0).file_name(5, "Datos", 1).resident(ATTR_REPARSE_POINT, "", &0xA000_0003u32.to_le_bytes()).finish(1);
+        assert!(apply_fixups(&mut junction));
+        assert_eq!(parse(&junction, 4096).reparse_tag, Some(0xA000_0003));
+        let mut cloud = RecBuilder::new(1024, REC_IN_USE | REC_DIRECTORY, 0).file_name(5, "OneDrive", 1).resident(ATTR_REPARSE_POINT, "", &0x9000_601Au32.to_le_bytes()).finish(1);
+        assert!(apply_fixups(&mut cloud));
+        let tag = parse(&cloud, 4096).reparse_tag.unwrap();
+        assert_eq!(tag & REPARSE_NAME_SURROGATE, 0);
     }
 
     #[test]

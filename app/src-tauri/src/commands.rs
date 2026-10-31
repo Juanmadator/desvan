@@ -151,19 +151,27 @@ fn run_scan(target: &str, prefer_mft: bool, progress: &Progress) -> Result<Scan,
         let root = format!("{letter}:\\");
         let vol = desvan_core::win::volumes().into_iter().find(|v| v.letter.starts_with(letter));
         let ntfs_vol = vol.as_ref().map(|v| v.filesystem.eq_ignore_ascii_case("NTFS")).unwrap_or(false);
-        if prefer_mft && ntfs_vol && desvan_core::win::is_elevated() {
-            match ntfs::FileSource::open_volume(letter) {
-                Ok(src) => match ntfs::scan(&src, &root, progress) {
-                    Ok(mut s) => {
-                        if let Some(v) = &vol {
-                            s.volume = Some(desvan_core::VolumeInfo { total: v.total, free: v.free, cluster: v.cluster, filesystem: v.filesystem.clone(), label: v.label.clone() });
-                        }
-                        return Ok(s);
+        if prefer_mft && ntfs_vol {
+            let result = if desvan_core::win::is_elevated() {
+                // ya somos administradores: lectura directa en este proceso
+                ntfs::FileSource::open_volume(letter).and_then(|src| ntfs::scan(&src, &root, progress))
+            } else {
+                // ayudante elevado sin ventana (Windows puede pedir permiso)
+                let exe = std::env::current_exe().map_err(err)?;
+                desvan_core::helper::scan_elevated(&exe, letter, progress)
+            };
+            match result {
+                Ok(mut s) => {
+                    if let Some(v) = &vol {
+                        s.volume = Some(desvan_core::VolumeInfo { total: v.total, free: v.free, cluster: v.cluster, filesystem: v.filesystem.clone(), label: v.label.clone() });
                     }
-                    Err(desvan_core::Error::Cancelled) => return Err("cancelado".into()),
-                    Err(e) => eprintln!("MFT no disponible ({e}); recorro carpetas"),
-                },
-                Err(e) => eprintln!("no se pudo abrir el volumen ({e}); recorro carpetas"),
+                    return Ok(s);
+                }
+                Err(desvan_core::Error::Cancelled) => return Err("cancelado".into()),
+                Err(e) => {
+                    eprintln!("MFT no disponible ({e}); recorro carpetas");
+                    progress.set_phase(desvan_core::Phase::Starting);
+                }
             }
         }
         return desvan_core::walk::scan(std::path::Path::new(&root), progress).map_err(err);

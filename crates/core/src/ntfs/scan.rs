@@ -93,7 +93,8 @@ fn std_flags(info: &RecordInfo) -> u16 {
     if a & record::FA_SYSTEM != 0 {
         f |= flags::SYSTEM;
     }
-    if a & record::FA_REPARSE != 0 {
+    // solo las uniones y enlaces simbólicos son «enlaces»; OneDrive, WOF o dedup no
+    if a & record::FA_REPARSE != 0 && info.reparse_tag.is_some_and(|t| t & record::REPARSE_NAME_SURROGATE != 0) {
         f |= flags::REPARSE;
     }
     if a & record::FA_COMPRESSED != 0 {

@@ -2,7 +2,7 @@
 //! laboratorio visual (app/treemap-lab.html).
 //!
 //! ```text
-//! cargo run --release -p desvan-core --example layout_dump -- <salida.bin> <ancho> <alto> [--views N] [--header PX] [--padding PX]
+//! cargo run --release -p desvan-core --example layout_dump -- <salida.bin> <ancho> <alto> [--views N] [--header PX] [--padding PX] [--min-area PX2] [--max-rects N] [--stress]
 //! ```
 //!
 //! Escribe `<salida>.bin` (formato de `Layout::to_bytes`) y `<salida>.json` (nombres,
@@ -189,7 +189,7 @@ fn build_volume() -> (Tree, u64) {
     }
     let cr = g.dir(s32, "catroot2");
     g.file(cr, "catdb", 58 * MB);
-    g.file(cr, "edb.log", 1 * MB);
+    g.file(cr, "edb.log", MB);
     let lf = g.dir(s32, "LogFiles");
     g.many(&mut r, lf, 140, 400 * KB, 1.6, |r, i| format!("{}{i}.{}", r.pick(WORDS), r.pick(&["etl", "log", "etl"])));
     let ps = g.path(s32, &["WindowsPowerShell", "v1.0"]);
@@ -777,6 +777,22 @@ fn build_volume() -> (Tree, u64) {
     (tree, names_bytes as u64)
 }
 
+/// Árbol uniforme para medir el renderizado: 40 × 30 carpetas con 300 archivos cada una.
+fn build_stress() -> Tree {
+    let mut g = Gen { b: Builder::with_capacity(370_000), key: 1 };
+    let mut r = Rng(7);
+    g.b.add(1, 0, "", 0, 0, 0, flags::DIR);
+    let exts = ["mp4", "jpg", "dll", "js", "pak", "zip", "pdf", "flac", "psd", "db", "log", "bin"];
+    for a in 0..40 {
+        let d = g.dir(1, &format!("grupo {a}"));
+        for b in 0..30 {
+            let e = g.dir(d, &format!("lote {a}-{b}"));
+            g.many(&mut r, e, 300, MB, 0.6, |r, i| format!("archivo {i}.{}", r.pick(&exts)));
+        }
+    }
+    g.b.build(1, "C:\\")
+}
+
 /// Cuántos hijos válidos (no enlace duro, con tamaño) tiene cada carpeta: para los «restos».
 fn valid_children(t: &Tree, n: NodeId) -> u64 {
     t.children(n).iter().filter(|&&c| t.flags[c as usize] & (flags::HARDLINK | flags::DELETED) == 0 && t.alloc[c as usize] > 0).count() as u64
@@ -801,6 +817,7 @@ fn cat_totals(t: &Tree, cats: &[u8], n: NodeId) -> Vec<u64> {
 }
 
 /// Escribe la vista de `node` y devuelve su layout.
+#[allow(clippy::too_many_arguments)]
 fn dump(t: &Tree, cats: &[u8], node: NodeId, w: f32, h: f32, opts: &LayoutOpts, base: &Path, name: &str, parent_view: Option<NodeId>) -> Layout {
     let s = Instant::now();
     let l = layout::layout(t, node, w, h, opts);
@@ -823,7 +840,7 @@ fn dump(t: &Tree, cats: &[u8], node: NodeId, w: f32, h: f32, opts: &LayoutOpts, 
         if f & rflags::REST != 0 {
             let key = l.parent(i).map_or(-1, |p| p as i64);
             let n = valid_children(t, id).saturating_sub(drawn.get(&key).copied().unwrap_or(0));
-            names.push(Value::from(format!("{} elementos pequeños", group_thousands(n))));
+            names.push(Value::from(format!("{} elementos", group_thousands(n))));
             // tamaño del resto: lo de la carpeta menos lo dibujado aparte
             let shown: u64 = (0..l.count).filter(|&j| l.parent(j).map_or(-1, |p| p as i64) == key && l.flags(j) & rflags::REST == 0).map(|j| t.alloc[l.ids[j] as usize]).sum();
             sizes.push(Value::from(t.alloc[id as usize].saturating_sub(shown)));
@@ -859,7 +876,7 @@ fn group_thousands(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push('.');
         }
         out.push(c);
@@ -870,7 +887,7 @@ fn group_thousands(n: u64) -> String {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 3 {
-        eprintln!("uso: layout_dump <salida.bin> <ancho> <alto> [--views N] [--header PX] [--padding PX]");
+        eprintln!("uso: layout_dump <salida.bin> <ancho> <alto> [--views N] [--header PX] [--padding PX] [--min-area PX2] [--max-rects N] [--stress]");
         std::process::exit(2);
     }
     let out = PathBuf::from(&args[0]);
@@ -878,14 +895,14 @@ fn main() {
     let h: f32 = args[2].parse().expect("alto");
     let flag = |name: &str, default: f32| -> f32 { args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(default) };
     let max_views = flag("--views", 16.0) as usize;
-    let opts = LayoutOpts { header: flag("--header", 18.0), dir_padding: flag("--padding", 2.0), ..Default::default() };
+    let opts = LayoutOpts { header: flag("--header", 18.0), dir_padding: flag("--padding", 2.0), min_area: flag("--min-area", 4.0), max_rects: flag("--max-rects", 750_000.0) as usize, ..Default::default() };
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).ok();
     }
     let stem = out.file_stem().unwrap().to_string_lossy().to_string();
 
     let s = Instant::now();
-    let (t, _) = build_volume();
+    let t = if args.iter().any(|a| a == "--stress") { build_stress() } else { build_volume().0 };
     println!("árbol sintético: {} nodos, {:.1} GB en disco, en {:?}", t.len(), t.alloc[t.root as usize] as f64 / GB as f64, s.elapsed());
     let cats = categories::ext_categories(&t);
 
@@ -915,7 +932,7 @@ fn main() {
             }
         }
     }
-    let volume_total: u64 = 1_000 * GB;
+    let volume_total: u64 = 2_048 * GB;
     let index = json!({
         "root": t.root,
         "rootPath": "C:\\",

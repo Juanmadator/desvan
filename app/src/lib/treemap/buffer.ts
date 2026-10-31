@@ -36,6 +36,8 @@ export const RFLAG = {
   REST: 16,
   /** Nodo sintético (huérfanos, espacio libre…). */
   SYNTHETIC: 32,
+  /** Única carpeta hija visible de su padre: sin marco propio; su nombre va en la franja del padre. */
+  CHAIN: 64,
 } as const;
 
 /** Categoría de una carpeta desplegada. */

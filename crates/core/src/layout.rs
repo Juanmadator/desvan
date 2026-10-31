@@ -80,6 +80,10 @@ pub mod rflags {
     pub const REST: u32 = 1 << 4;
     /// Nodo sintético del árbol (huérfanos, espacio libre…).
     pub const SYNTHETIC: u32 = 1 << 5;
+    /// Carpeta que acapara su carpeta padre (≥ 95 % de su contenido): va sin marco
+    /// propio y su nombre se añade a la franja del padre («Users › usuario»).
+    /// Siempre es el rectángulo siguiente a su padre.
+    pub const CHAIN: u32 = 1 << 6;
 }
 
 /// Qué tamaño manda en las áreas.
@@ -368,6 +372,8 @@ struct Pending {
     s: Surf,
     /// Altura de la cresta propia.
     h: f64,
+    /// Única carpeta hija visible: sin marco propio.
+    chain: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -430,7 +436,7 @@ pub fn layout_into(tree: &Tree, root: NodeId, w: f32, h: f32, opts: &LayoutOpts,
     if tree.is_dir(root) {
         // la raíz no se dibuja: su contenido ocupa toda la vista
         let mut bufs = Bufs { stack: &mut sc.stack, items: &mut sc.items, boxes: &mut sc.boxes };
-        ctx.expand(root, full, 1, -1, Surf::default(), h0, true, &mut bufs);
+        ctx.expand(root, full, 1, -1, Surf::default(), h0, (true, false), &mut bufs);
         while let Some(p) = bufs.stack.pop() {
             ctx.visit(p, &mut bufs, out);
         }
@@ -482,14 +488,19 @@ impl Ctx<'_> {
             return;
         }
         let idx = out.emit(n, &r, &s, p.depth, CAT_DIR, rflags::DIR | synth, p.parent);
-        let (pad, head) = self.frame(w, h);
+        let (pad, head) = if p.chain { (0.0, 0.0) } else { self.frame(w, h) };
         let c = [r[0] + pad, r[1] + pad.max(head), r[2] - pad, r[3] - pad];
         let (cw, ch) = (c[2] - c[0], c[3] - c[1]);
         let room = cw >= MIN_SIDE && ch >= MIN_SIDE && cw * ch >= self.min_area;
-        // un marco sin franja ni margen no se ve: si solo cabría un «resto», mejor maciza
-        let framed = pad > 0.0 || head > 0.0;
-        if room && p.depth < self.opts.max_depth && self.expand(n, c, p.depth + 1, idx as i32, s, p.h * self.falloff, framed, b) {
+        // sin franja de título no se vería de quién es el «resto»: mejor maciza y rotulada
+        let framed = head > 0.0;
+        // la hija única puede ir en cadena si este nombre se ve en una franja
+        let chainable = head > 0.0 || p.chain;
+        if room && p.depth < self.opts.max_depth && self.expand(n, c, p.depth + 1, idx as i32, s, p.h * self.falloff, (framed, chainable), b) {
             let mut fl = rflags::DIR | synth;
+            if p.chain {
+                fl |= rflags::CHAIN;
+            }
             if pad > 0.0 {
                 fl |= rflags::PADDED;
             }
@@ -512,10 +523,12 @@ impl Ctx<'_> {
         (pad, head)
     }
 
-    /// Reparte los hijos de `dir` en `c` y los apila. Devuelve si hay algo que dibujar;
-    /// con `rest_only` vale también un único «resto» que lo ocupe todo.
+    /// Reparte los hijos de `dir` en `c` y los apila. Devuelve si hay algo que dibujar.
+    /// `mode.0`: vale también un único «resto» que lo ocupe todo; `mode.1`: una hija
+    /// única puede ir en cadena.
     #[allow(clippy::too_many_arguments)]
-    fn expand(&self, dir: NodeId, c: [f64; 4], depth: u32, parent: i32, s: Surf, h: f64, rest_only: bool, b: &mut Bufs) -> bool {
+    fn expand(&self, dir: NodeId, c: [f64; 4], depth: u32, parent: i32, s: Surf, h: f64, mode: (bool, bool), b: &mut Bufs) -> bool {
+        let (rest_only, chainable) = mode;
         let total = self.vals[dir as usize];
         if total == 0 {
             return false;
@@ -564,7 +577,7 @@ impl Ctx<'_> {
                 }
             }
             // estable: a igual valor manda el orden del árbol
-            b.items.sort_by(|x, y| y.v.cmp(&x.v));
+            b.items.sort_by_key(|x| std::cmp::Reverse(x.v));
         }
         if b.items.is_empty() && !rest_only {
             return false;
@@ -576,13 +589,16 @@ impl Ctx<'_> {
         let rest_area = (rest[2] - rest[0]).max(0.0) * (rest[3] - rest[1]).max(0.0);
         let mut any = !b.items.is_empty();
         // el resto se apila primero para que salga el último de sus hermanos
-        if total > sum && rest_area >= self.min_area {
+        let with_rest = total > sum && rest_area >= self.min_area;
+        if with_rest {
             let cat = if rest_node != NONE { self.cat_of(rest_node) } else { SISTEMA };
-            b.stack.push(Pending { node: dir, parent, depth, kind: REST, cat, r: rest, s, h });
+            b.stack.push(Pending { node: dir, parent, depth, kind: REST, cat, r: rest, s, h, chain: false });
             any = true;
         }
+        // una carpeta que se lo lleva casi todo forma cadena con esta (sin franja propia)
+        let chain = chainable && !b.items.is_empty() && t.is_dir(b.items[0].node) && b.items[0].v as f64 >= 0.95 * total as f64;
         for k in (0..b.items.len()).rev() {
-            b.stack.push(Pending { node: b.items[k].node, parent, depth, kind: NODE, cat: 0, r: b.boxes[k], s, h });
+            b.stack.push(Pending { node: b.items[k].node, parent, depth, kind: NODE, cat: 0, r: b.boxes[k], s, h, chain: chain && k == 0 });
         }
         any
     }
@@ -1075,6 +1091,58 @@ mod tests {
         for want in ["b", "mediano.zip", "c.iso", "d.iso"] {
             assert!(names.contains(&want), "falta {want}: {names:?}");
         }
+    }
+
+    #[test]
+    fn single_child_chains_share_the_header() {
+        let mut b = Builder::default();
+        b.add(1, 0, "", 0, 0, 0, flags::DIR);
+        b.add(2, 1, "Users", 0, 0, 0, flags::DIR);
+        b.add(3, 2, "usuario", 0, 0, 0, flags::DIR);
+        for k in 0..6u64 {
+            b.add(10 + k, 3, &format!("v{k}.mp4"), (k + 1) << 30, (k + 1) << 30, 0, 0);
+        }
+        b.add(4, 1, "Windows", 0, 0, 0, flags::DIR);
+        b.add(5, 4, "explorer.exe", 9 << 30, 9 << 30, 0, 0);
+        let t = b.build(1, "C:\\");
+        let l = layout(&t, t.root, 800.0, 600.0, &LayoutOpts::default());
+        check_geometry(&l, 800.0, 600.0);
+        let users = (0..l.count).find(|&i| t.name(l.ids[i]) == "Users").unwrap();
+        let usuario = users + 1;
+        assert_eq!(t.name(l.ids[usuario]), "usuario", "la hija única va justo detrás");
+        assert_eq!(l.parent(usuario), Some(users));
+        let fu = l.flags(users);
+        let fc = l.flags(usuario);
+        assert!(fu & rflags::HEADER != 0 && fu & rflags::CHAIN == 0);
+        assert!(fc & rflags::CHAIN != 0 && fc & (rflags::HEADER | rflags::PADDED) == 0);
+        // ocupa justo el contenido del padre
+        let [x, y, w, h] = l.rect(users);
+        let pad = l.padding;
+        assert_eq!(l.rect(usuario), [x + pad, y + l.header, w - 2.0 * pad, h - l.header - pad]);
+        // «Windows» tiene un solo archivo: no es cadena
+        let win = (0..l.count).find(|&i| t.name(l.ids[i]) == "explorer.exe").unwrap();
+        assert!(l.flags(win) & rflags::CHAIN == 0);
+
+        // con una hermana pequeña (< 5 %) sigue siendo cadena; con una grande, no
+        let with_sibling = |sib: u64| {
+            let mut b = Builder::default();
+            b.add(1, 0, "", 0, 0, 0, flags::DIR);
+            b.add(2, 1, "Users", 0, 0, 0, flags::DIR);
+            b.add(3, 2, "usuario", 0, 0, 0, flags::DIR);
+            b.add(4, 3, "peli.mkv", 100 << 30, 100 << 30, 0, 0);
+            b.add(5, 2, "Public", 0, 0, 0, flags::DIR);
+            b.add(6, 5, "doc.pdf", sib, sib, 0, 0);
+            b.add(7, 1, "pagefile.sys", 60 << 30, 60 << 30, 0, 0);
+            let t = b.build(1, "C:\\");
+            let l = layout(&t, t.root, 800.0, 600.0, &LayoutOpts::default());
+            check_geometry(&l, 800.0, 600.0);
+            let find = |n: &str| (0..l.count).find(|&i| t.name(l.ids[i]) == n).unwrap();
+            assert!(l.flags(find("Public")) & rflags::CHAIN == 0);
+            assert_eq!(find("usuario"), find("Users") + 1);
+            l.flags(find("usuario")) & rflags::CHAIN != 0
+        };
+        assert!(with_sibling(2 << 30));
+        assert!(!with_sibling(20 << 30));
     }
 
     #[test]

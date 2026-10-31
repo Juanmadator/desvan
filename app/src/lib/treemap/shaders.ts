@@ -78,6 +78,8 @@ void main() {
   float lvl = clamp(v_info.x - 1.0, 0.0, 8.0);
   vec3 col;
   if ((fl & 1) != 0 && (fl & 8) == 0) {
+    // cadena: coincide con el contenido del padre, no se pinta
+    if ((fl & 64) != 0) discard;
     // marco de carpeta: panel, franja de título y borde de 1 px
     float dy = v_pos.y - v_box.y;
     float de = min(min(v_pos.x - v_box.x, v_box.z - v_pos.x), min(dy, v_box.w - v_pos.y));
@@ -91,18 +93,22 @@ void main() {
     vec3 base = u_palette[cat < 16 ? cat : 0];
     vec2 g = vec2(mix(v_grad.x, v_grad.y, v_uv.x), mix(v_grad.z, v_grad.w, v_uv.y));
     if ((fl & (8 | 16 | 32)) != 0) {
-      // resto, carpeta maciza o sintético: apagado y con una trama fina
+      // resto, carpeta maciza o sintético: algo apagado y con teselas diminutas
+      // (sugiere «muchos archivos pequeños»)
       float l = dot(base, vec3(0.299, 0.587, 0.114));
-      base = (fl & 32) != 0 ? vec3(l * 0.7) : mix(vec3(l), base, 0.6) * 0.86;
-      float s = fract((v_pos.x + v_pos.y) / (5.0 * u_dpr));
-      base *= 1.0 - 0.10 * step(0.5, s);
+      base = (fl & 32) != 0 ? vec3(l * 0.7) : mix(vec3(l), base, 0.7) * 0.92;
+      float cell = 4.0 * u_dpr;
+      vec2 q = mod(v_pos - v_box.xy, cell);
+      float edge = max(step(cell - 1.0, q.x), step(cell - 1.0, q.y));
+      base *= 1.0 - 0.13 * edge;
     }
     col = cushion(base, g);
   }
   float m = mix(v_mark.x, v_mark.y, u_hiT);
   if (m < 0.999) {
+    // apagado: sin color y hundido hacia el fondo, pero con su relieve
     float l = dot(col, vec3(0.299, 0.587, 0.114));
-    vec3 dim = mix(u_bg, vec3(l), 0.28);
+    vec3 dim = mix(u_bg, vec3(l) * vec3(0.92, 0.95, 1.0), 0.34);
     col = mix(dim, col, m);
   }
   o = vec4(clamp(col, 0.0, 1.0), 1.0);

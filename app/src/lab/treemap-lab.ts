@@ -166,7 +166,8 @@ function renderSelection() {
       <dt>Carpetas</dt><dd>${nf.format(cur.side.dirs)}</dd>
       <dt>Rectángulos</dt><dd>${nf.format(cur.side.count)} · ${String(cur.side.layoutMs).replace(".", ",")} ms</dd></dl>`;
     (el.querySelector(".s-name") as HTMLElement).textContent = cur.side.name;
-    (el.querySelector(".s-path") as HTMLElement).textContent = cur.side.path;
+    (el.querySelector(".s-path") as HTMLElement).textContent =
+      cur.meta.id === manifest.root ? `Volumen ${manifest.volume.label} · ${manifest.volume.filesystem}` : cur.side.path;
     return;
   }
   const k = kindOf(i);
@@ -296,15 +297,25 @@ function goUp(target?: number) {
 
 // ---------- arranque ----------
 
+// ?set=lab-denso carga otro volcado (p. ej. uno con min_area pequeña para medir)
+const SET = new URLSearchParams(location.search).get("set") ?? "lab";
+
 async function main() {
-  manifest = await (await fetch(`${DATA}lab.views.json`)).json();
+  manifest = await (await fetch(`${DATA}${SET}.views.json`)).json();
   const canvas = $<HTMLCanvasElement>("map");
   canvas.style.width = `${manifest.width}px`;
   canvas.style.height = `${manifest.height}px`;
   view = new TreemapView(canvas, {
     labelFor: (i) => {
       const name = cur.side.names[i];
-      return name ? { name, detail: bytes(cur.side.sizes[i]) } : null;
+      if (!name) return null;
+      const f = flagsOf(i);
+      const p = field(i, FIELD.PARENT);
+      // un «resto» en una carpeta sin franja lleva el nombre de la carpeta
+      if (f & RFLAG.REST && p >= 0 && (flagsOf(p) & RFLAG.HEADER) === 0 && (flagsOf(p) & RFLAG.CHAIN) === 0) {
+        return { name: cur.side.names[p], detail: name };
+      }
+      return { name, detail: bytes(cur.side.sizes[i]) };
     },
     onHover: (hit, ev) => showTip(hit, ev),
     onClick: (hit) => {
@@ -359,6 +370,41 @@ const lab = {
   },
   zoomInto,
   goUp,
+  /** Mide: setData, fotogramas con el cursor moviéndose y fotogramas con repintado completo. */
+  async perf(frames = 90) {
+    await lab.idle();
+    const stats = (t: number[]) => {
+      const v = t.slice().sort((a, b) => a - b);
+      return { avg: +(v.reduce((a, b) => a + b, 0) / v.length).toFixed(2), p95: +v[Math.floor(v.length * 0.95)].toFixed(2), max: +v[v.length - 1].toFixed(2) };
+    };
+    const t0 = performance.now();
+    view.setData(cur.layout.rects, cur.layout.ids, cur.layout.meta);
+    const setDataMs = +(performance.now() - t0).toFixed(2);
+    await lab.idle();
+    const frame = () => new Promise<number>((r) => requestAnimationFrame(r));
+    const b = view.canvas.getBoundingClientRect();
+    const hover: number[] = [];
+    let last = await frame();
+    for (let k = 0; k < frames; k++) {
+      const x = 5 + ((k * 97) % (b.width - 10));
+      const y = 5 + ((k * 61) % (b.height - 10));
+      view.canvas.dispatchEvent(new MouseEvent("mousemove", { clientX: b.left + x, clientY: b.top + y, bubbles: true }));
+      const now = await frame();
+      hover.push(now - last);
+      last = now;
+    }
+    const full: number[] = [];
+    last = await frame();
+    for (let k = 0; k < Math.min(frames, 60); k++) {
+      lab.highlight(k % 2 ? 1 : null);
+      const now = await frame();
+      full.push(now - last);
+      last = now;
+    }
+    lab.highlight(null);
+    await lab.idle();
+    return { rects: cur.side.count, setDataMs, hoverFrameMs: stats(hover), fullRenderFrameMs: stats(full) };
+  },
   /** Espera a que no haya animaciones. */
   async idle(): Promise<void> {
     await ready;

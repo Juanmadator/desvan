@@ -68,7 +68,7 @@ describe("planLabels", () => {
     [300, 18, 398, 60, 0], // archivo mediano
     [300, 60, 330, 70, 0], // demasiado pequeño
     [330, 60, 398, 298, RFLAG.DIR], // carpeta sin franja: no se rotula
-    [340, 70, 390, 120, RFLAG.REST], // resto con sitio
+    [336, 70, 396, 120, RFLAG.REST], // resto con sitio
   ]);
 
   it("elige franjas y bloques con sitio, de mayor a menor", () => {

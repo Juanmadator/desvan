@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app } from "../lib/app.svelte";
-  import { api, inTauri, type Volume } from "../lib/api";
+  import { inTauri, type Volume } from "../lib/api";
   import { bytes, pct } from "../lib/format";
   import Logo from "../components/Logo.svelte";
 
@@ -11,11 +11,6 @@
     const { open } = await import("@tauri-apps/plugin-dialog");
     const dir = await open({ directory: true, title: "Elige una carpeta para analizar" });
     if (typeof dir === "string") void app.scan(dir);
-  }
-
-  async function elevate(target?: string) {
-    const ok = await api.relaunchAdmin(target);
-    if (!ok) app.notify("Sin permisos de administrador: se usará el recorrido normal.");
   }
 
   const kindLabel = (v: Volume) => (v.kind === "fija" ? "Disco local" : v.kind === "extraíble" ? "Unidad extraíble" : v.kind === "red" ? "Unidad de red" : v.kind);
@@ -30,21 +25,14 @@
     </div>
   </header>
 
-  {#if !app.elevated && app.volumes.some(isNtfs)}
-    <section class="boost">
-      <div class="bolt" aria-hidden="true">⚡</div>
-      <div class="txt">
-        <strong>Activa el modo ultrarrápido</strong>
-        <span class="muted">Como administrador, Desván lee directamente la tabla maestra de NTFS y analiza un disco entero en segundos. Sin permisos funciona igual, recorriendo carpeta a carpeta.</span>
-      </div>
-      <button class="btn primary" onclick={() => elevate()}>Reiniciar como administrador</button>
-    </section>
+  {#if app.volumes.some(isNtfs)}
+    <p class="note"><span aria-hidden="true">⚡</span> En los discos NTFS, Desván lee directamente la tabla maestra de archivos (MFT) y analiza el disco entero en segundos. {#if !app.elevated}Windows puede pedirte permiso de administrador: solo se usa para leer.{/if}</p>
   {/if}
 
   <section class="drives">
     {#each app.volumes as v (v.letter)}
       {@const used = v.total - v.free}
-      {@const fast = isNtfs(v) && app.elevated}
+      {@const fast = isNtfs(v)}
       <article class="drive">
         <div class="top">
           <div class="letter">{v.letter}:</div>
@@ -106,24 +94,14 @@
   header p {
     margin: 0;
   }
-  .boost {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 14px 18px;
-    border-radius: 14px;
-    border: 1px solid #4a3818;
-    background: linear-gradient(90deg, rgba(243, 167, 59, 0.12), rgba(243, 167, 59, 0.03));
-    max-width: 980px;
+  .note {
+    margin: 0;
+    max-width: 860px;
+    color: var(--muted);
+    font-size: 12.5px;
   }
-  .bolt {
-    font-size: 22px;
-  }
-  .txt {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
+  .note span {
+    color: var(--accent);
   }
   .drives {
     display: grid;

@@ -38,9 +38,10 @@ export interface TreemapOptions {
   zoomDuration?: number;
   /** Seguir el tamaño del lienzo con un ResizeObserver (por defecto sí). */
   autoResize?: boolean;
-  /** Iluminación de los cojines. */
+  /** Iluminación de los cojines: dirección hacia la luz, luz ambiente y brillo especular. */
   light?: [number, number, number];
   ambient?: number;
+  specular?: number;
   onHover?: TreemapView["onHover"];
   onClick?: TreemapView["onClick"];
   onDoubleClick?: TreemapView["onDoubleClick"];
@@ -65,6 +66,9 @@ type Uniforms = Record<string, WebGLUniformLocation | null>;
 type ThemeRGB = Record<"background" | "panel" | "header" | "border" | "accent" | "hover", RGB>;
 
 const OUTLINE_FLOATS = 12;
+/** Ganancia del sombreado (la misma en el sombreador y al elegir el color del texto). */
+const GAIN = 1.08;
+const CHAIN_SEP = " › ";
 const MAX_OUTLINES = 4;
 
 export class TreemapView {
@@ -90,6 +94,7 @@ export class TreemapView {
   private zoomDuration: number;
   private light: [number, number, number];
   private ambient: number;
+  private specular: number;
 
   // datos
   private rects: Float32Array<ArrayBufferLike> = new Float32Array(0);
@@ -158,6 +163,7 @@ export class TreemapView {
     this.zoomDuration = opts.zoomDuration ?? 260;
     this.light = normalize3(opts.light ?? [-1, -1.25, 2.4]);
     this.ambient = opts.ambient ?? 0.2;
+    this.specular = opts.specular ?? 0;
     this.onHover = opts.onHover ?? null;
     this.onClick = opts.onClick ?? null;
     this.onDoubleClick = opts.onDoubleClick ?? null;
@@ -296,6 +302,8 @@ export class TreemapView {
   zoomTo(fromRect: [number, number, number, number] | null, then: () => void): void {
     if (this.disposed) return;
     this.hover = -1;
+    // las etiquetas desaparecen al instante y vuelven con un fundido al terminar
+    this.overlay.style.transition = "none";
     this.overlay.style.opacity = "0";
     if (fromRect && this.n > 0 && fromRect[2] > 0 && fromRect[3] > 0) {
       this.zoom = { kind: "in", rect: [...fromRect], start: performance.now(), dur: this.zoomDuration, then };
@@ -589,7 +597,10 @@ export class TreemapView {
     if (this.labelsDirty && !busy) {
       this.labelsDirty = false;
       this.drawLabels();
-      this.overlay.style.opacity = "1";
+      if (this.overlay.style.opacity !== "1") {
+        this.overlay.style.transition = "opacity 160ms ease";
+        this.overlay.style.opacity = "1";
+      }
     }
     if (finishedIn) {
       // la carpeta ya llena la vista: ahora los datos nuevos
@@ -617,8 +628,8 @@ export class TreemapView {
       gl.uniform3fv(u.u_palette, this.paletteF32);
       gl.uniform3fv(u.u_light, this.light);
       gl.uniform1f(u.u_ambient, this.ambient);
-      gl.uniform1f(u.u_gain, 1.08);
-      gl.uniform1f(u.u_spec, 0.1);
+      gl.uniform1f(u.u_gain, GAIN);
+      gl.uniform1f(u.u_spec, this.specular);
       gl.uniform3fv(u.u_bg, c.background);
       gl.uniform3fv(u.u_panel, c.panel);
       gl.uniform3fv(u.u_header, c.header);
@@ -659,7 +670,7 @@ export class TreemapView {
       if (p >= 0 && p !== this.selected) out.push([...this.devBox(p), ...white, 0.32, d, 0, 0, 0]);
     }
     if (this.selected >= 0 && this.selected < this.n) {
-      out.push([...this.devBox(this.selected), ...accent, 1, 2 * d, 7 * d, 0.55, 0.12]);
+      out.push([...this.devBox(this.selected), ...accent, 1, 2 * d, 9 * d, 0.62, 0.12]);
     }
     if (h >= 0 && h < this.n && h !== this.selected) {
       out.push([...this.devBox(h), ...white, 0.95, 1.5 * d, 0, 0, 0.1]);
@@ -737,16 +748,18 @@ export class TreemapView {
     const mName = (t: string) => this.measure(nameFont, t);
     const wDet = lab.detail ? this.measure(detFont, lab.detail) : 0;
     const gap = 10;
+    const full = this.chainName(s.index, lab.name);
+    const fit = (w: number) => this.fitChain(full, w, mName);
     let name: string | null;
     let showDet = false;
-    if (lab.detail && mName(lab.name) + gap + wDet <= s.w) {
-      name = lab.name;
+    if (lab.detail && mName(full) + gap + wDet <= s.w) {
+      name = full;
       showDet = true;
     } else if (lab.detail && s.w >= wDet + gap + 56) {
-      name = ellipsize(lab.name, s.w - wDet - gap, mName, "end");
+      name = fit(s.w - wDet - gap);
       showDet = true;
     } else {
-      name = ellipsize(lab.name, s.w, mName, "end");
+      name = fit(s.w);
     }
     if (!name) return;
     const wName = mName(name);
@@ -773,7 +786,8 @@ export class TreemapView {
     const detFont = this.font(400, 11);
     const isFile = (flags & (RFLAG.DIR | RFLAG.REST)) === 0;
     const mName = (t: string) => this.measure(nameFont, t);
-    const name = ellipsize(lab.name, s.w, mName, isFile ? "middle" : "end", 3);
+    // un nombre recortado a 3 o 4 letras no dice nada: mejor sin etiqueta
+    const name = ellipsize(lab.name, s.w, mName, isFile ? "middle" : "end", isFile ? 6 : 5);
     if (!name) return;
     const two = !!lab.detail && s.h >= 36;
     const cx = s.x + s.w / 2;
@@ -781,9 +795,9 @@ export class TreemapView {
     const yName = two ? cy - 7 : cy;
     const wName = mName(name);
     if (!occ.place(cx - wName / 2, yName - size / 2 - 1, wName, size + 2)) return;
-    const bg = this.paletteRGB[cat] ?? this.paletteRGB[0] ?? [0.5, 0.5, 0.5];
-    const muted = (flags & (RFLAG.REST | RFLAG.COLLAPSED | RFLAG.SYNTHETIC)) !== 0;
-    const lightText = muted || contrast(bg, [1, 1, 1]) >= 2.3;
+    // color real bajo el texto (con el sombreado del cojín en el centro)
+    const bg = this.shadedCenter(s.index, cat, flags);
+    const lightText = contrast(bg, [1, 1, 1]) >= 0.8 * contrast(bg, parseColor(this.theme.textDark));
     const fg = lightText ? this.theme.text : this.theme.textDark;
     const shadow = lightText ? "rgba(0, 0, 0, 0.45)" : "rgba(255, 255, 255, 0.22)";
     ctx.textAlign = "center";
@@ -793,7 +807,8 @@ export class TreemapView {
     ctx.fillStyle = fg;
     ctx.fillText(name, cx, yName);
     if (two && lab.detail) {
-      const det = ellipsize(lab.detail, s.w, (t) => this.measure(detFont, t), "end", 3);
+      // el tamaño se ve entero o no se ve
+      const det = this.measure(detFont, lab.detail) <= s.w ? lab.detail : null;
       if (det) {
         const wDet = this.measure(detFont, det);
         if (occ.place(cx - wDet / 2, cy + 8 - 7, wDet, 14)) {
@@ -805,6 +820,49 @@ export class TreemapView {
         }
       }
     }
+  }
+
+  /** Color sombreado en el centro de un bloque, como lo calcula BASE_FS. */
+  private shadedCenter(i: number, cat: number, flags: number): RGB {
+    const o = i * STRIDE;
+    const r = this.rects;
+    let base = this.paletteRGB[cat] ?? this.paletteRGB[0] ?? ([0.5, 0.5, 0.5] as RGB);
+    if (flags & (RFLAG.REST | RFLAG.COLLAPSED | RFLAG.SYNTHETIC)) {
+      const l = 0.299 * base[0] + 0.587 * base[1] + 0.114 * base[2];
+      base = flags & RFLAG.SYNTHETIC ? [l * 0.7, l * 0.7, l * 0.7] : (base.map((c) => (l + (c - l) * 0.7) * 0.92) as RGB);
+    }
+    const gx = (r[o + FIELD.GX0] + r[o + FIELD.GX1]) / 2;
+    const gy = (r[o + FIELD.GY0] + r[o + FIELD.GY1]) / 2;
+    const [lx, ly, lz] = this.light;
+    const d = Math.max(0, (-gx * lx - gy * ly + lz) / Math.hypot(gx, gy, 1));
+    const k = (this.ambient + (1 - this.ambient) * d) * GAIN;
+    return base.map((c) => Math.min(1, c * k)) as RGB;
+  }
+
+  /** Nombre de una carpeta seguido de su cadena de hijas únicas: «Users › usuario». */
+  private chainName(i: number, first: string): string {
+    let name = first;
+    let prev = i;
+    for (let k = i + 1; k < this.n; k++) {
+      const o = k * STRIDE;
+      if (this.rects[o + FIELD.PARENT] !== prev || (this.rects[o + FIELD.FLAGS] & RFLAG.CHAIN) === 0) break;
+      const lab = this.labelFor?.(k, this.ids[k]);
+      if (!lab?.name) break;
+      name += CHAIN_SEP + lab.name;
+      prev = k;
+    }
+    return name;
+  }
+
+  /** Encaja una cadena: completa, «primera › … › última» o recortada. */
+  private fitChain(full: string, w: number, measure: (t: string) => number): string | null {
+    if (measure(full) <= w) return full;
+    const parts = full.split(CHAIN_SEP);
+    if (parts.length >= 3) {
+      const short = parts[0] + CHAIN_SEP + "…" + CHAIN_SEP + parts[parts.length - 1];
+      if (measure(short) <= w) return short;
+    }
+    return ellipsize(full, w, measure, "end");
   }
 
   // ---------- eventos ----------
