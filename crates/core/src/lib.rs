@@ -6,6 +6,8 @@
 pub mod ntfs;
 pub mod tree;
 pub mod util;
+#[cfg(windows)]
+pub mod win;
 
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};

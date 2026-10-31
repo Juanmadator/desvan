@@ -31,6 +31,8 @@ pub mod flags {
     pub const OFFLINE: u16 = 1 << 11;
     /// No se pudo leer (permisos).
     pub const DENIED: u16 = 1 << 12;
+    /// Enviado a la Papelera desde Desván (su espacio ya se ha descontado).
+    pub const DELETED: u16 = 1 << 13;
 }
 
 /// Entrada recogida por un escáner antes de existir el árbol.
