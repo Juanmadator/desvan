@@ -2,7 +2,7 @@
 // Uso: node scripts/shots.mjs [exe] [--scan C:] [--out captures/app]
 // Conecta Playwright al WebView2 por CDP, espera a la interfaz y guarda capturas de cada pantalla.
 import { chromium } from "../app/node_modules/@playwright/test/index.mjs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 
 const args = process.argv.slice(2);
@@ -14,11 +14,23 @@ const scanTarget = scanIdx >= 0 ? args[scanIdx + 1] : null;
 const port = 9333;
 mkdirSync(out, { recursive: true });
 
-const pid = execFileSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/run-hidden.ps1", "-Exe", exe, "-DebugPort", String(port)]).toString().trim();
+// el lanzador se queda vivo mientras dure la app (mantiene el escritorio oculto)
+const launcher = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/run-hidden.ps1", "-Exe", exe, "-DebugPort", String(port)], {
+  stdio: ["ignore", "pipe", "inherit"],
+});
+const pid = await new Promise((resolve, reject) => {
+  let buf = "";
+  launcher.stdout.on("data", (d) => {
+    buf += d;
+    const first = buf.split(/\r?\n/)[0].trim();
+    if (/^\d+$/.test(first)) resolve(first);
+  });
+  launcher.on("exit", () => reject(new Error("el lanzador terminó: " + buf)));
+});
 console.log("app pid", pid);
 const kill = () => {
   try {
-    execFileSync("taskkill", ["/PID", pid, "/T", "/F"], { stdio: "ignore" });
+    execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
   } catch {}
 };
 process.on("exit", kill);
@@ -39,26 +51,26 @@ for (let i = 0; !page && i < 40; i++) {
   await new Promise((r) => setTimeout(r, 250));
   page = ctx.pages()[0];
 }
-await page.setViewportSize?.({ width: 1440, height: 900 }).catch(() => {});
 page.on("console", (m) => m.type() === "error" && console.log("consola:", m.text()));
 page.on("pageerror", (e) => console.log("error:", e.message));
-await page.waitForSelector(".home, .scan, .ex", { timeout: 20000 });
+await page.waitForSelector(".home, .scan, .ex", { timeout: 30000 });
 await page.waitForTimeout(800);
 await page.screenshot({ path: `${out}/1-inicio.png` });
 
 if (scanTarget) {
   await page.evaluate((t) => window.__desvanScan?.(t), scanTarget);
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(300);
   await page.screenshot({ path: `${out}/2-escaneando.png` });
-  await page.waitForSelector(".ex", { timeout: 180000 });
+  await page.waitForSelector(".ex", { timeout: 300000 });
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${out}/3-explorar.png` });
   for (const tab of ["Tipos", "Mayores", "Limpieza"]) {
     await page.getByRole("tab", { name: tab }).click();
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1500);
     await page.screenshot({ path: `${out}/4-${tab.toLowerCase()}.png` });
   }
 }
 await browser.close();
 kill();
 console.log("capturas en", out);
+process.exit(0);

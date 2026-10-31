@@ -180,7 +180,8 @@ pub fn scan_cancel(state: State<'_, AppState>) {
 
 #[tauri::command]
 pub fn scan_summary(state: State<'_, AppState>) -> Res<ScanSummary> {
-    Ok(summary(&state.current()?))
+    let d = state.current()?;
+    Ok(summary(&d))
 }
 
 // ---------- consultas sobre el árbol ----------
@@ -237,7 +238,7 @@ fn valid(t: &Tree, n: u32) -> Res<()> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn node(state: State<'_, AppState>, id: u32) -> Res<NodeInfo> {
     let d = state.current()?;
     let s = d.scan.read().unwrap();
@@ -256,7 +257,7 @@ pub fn node(state: State<'_, AppState>, id: u32) -> Res<NodeInfo> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn children(state: State<'_, AppState>, id: u32, offset: Option<u32>, limit: Option<u32>) -> Res<Vec<Row>> {
     let d = state.current()?;
     let s = d.scan.read().unwrap();
@@ -275,7 +276,7 @@ pub struct Crumb {
     name: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ancestors(state: State<'_, AppState>, id: u32) -> Res<Vec<Crumb>> {
     let d = state.current()?;
     let s = d.scan.read().unwrap();
@@ -303,7 +304,7 @@ pub struct Hit {
 }
 
 /// Busca por nombre (sin distinguir mayúsculas). Devuelve los más grandes primero.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn search(state: State<'_, AppState>, query: String, limit: Option<usize>) -> Res<Vec<Hit>> {
     let d = state.current()?;
     let s = d.scan.read().unwrap();
@@ -340,7 +341,7 @@ pub fn search(state: State<'_, AppState>, query: String, limit: Option<usize>) -
 }
 
 /// Los archivos más grandes bajo un nodo.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn largest(state: State<'_, AppState>, id: u32, limit: Option<usize>) -> Res<Vec<Hit>> {
     let d = state.current()?;
     let s = d.scan.read().unwrap();
@@ -381,7 +382,7 @@ pub struct ExtStats {
 }
 
 /// Espacio por extensión y por categoría bajo un nodo.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ext_stats(state: State<'_, AppState>, id: u32, limit: Option<usize>) -> Res<ExtStats> {
     let d = state.current()?;
     let s = d.scan.read().unwrap();
@@ -422,7 +423,7 @@ pub fn ext_stats(state: State<'_, AppState>, id: u32, limit: Option<usize>) -> R
 
 // ---------- treemap, limpieza y duplicados ----------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn layout(state: State<'_, AppState>, id: u32, width: f32, height: f32, metric: Option<String>, min_area: Option<f32>) -> Res<tauri::ipc::Response> {
     let d = state.current()?;
     let s = d.scan.read().unwrap();
@@ -432,7 +433,7 @@ pub fn layout(state: State<'_, AppState>, id: u32, width: f32, height: f32, metr
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn junk(state: State<'_, AppState>) -> Res<serde_json::Value> {
     let d = state.current()?;
     let s = d.scan.read().unwrap();
@@ -467,7 +468,7 @@ pub struct DeleteResult {
 }
 
 /// Envía a la Papelera y descuenta el espacio en el árbol (sin volver a escanear).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete(state: State<'_, AppState>, ids: Vec<u32>) -> Res<DeleteResult> {
     let d = state.current()?;
     let paths: Vec<String> = {

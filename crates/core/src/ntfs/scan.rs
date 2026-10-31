@@ -11,7 +11,7 @@
 use super::boot::Boot;
 use super::record::{self, NameRef, RecordInfo};
 use super::runs::{self, Run};
-use super::source::Source;
+use super::source::{AlignedBuf, Source};
 use crate::tree::{flags, Builder};
 use crate::util::filetime_to_unix;
 use crate::{ms, Error, Method, Phase, Progress, Result, Scan, ScanStats, VolumeInfo};
@@ -20,8 +20,24 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-/// Registros por bloque de lectura (4096 × 1 KB = 4 MB).
-const CHUNK_RECORDS: u64 = 4096;
+/// Registros por bloque de lectura (8192 × 1 KB = 8 MB). Ajustable con DESVAN_CHUNK.
+/// Medido en una NVMe: 4–8 lecturas simultáneas de bloques grandes dan el máximo (~1,3 GB/s);
+/// con 16–32 en cola el disco rinde menos.
+const CHUNK_RECORDS: u64 = 8192;
+/// Lecturas simultáneas (hilos de E/S). Ajustable con DESVAN_IO_THREADS.
+const IO_THREADS: usize = 6;
+
+fn io_threads() -> usize {
+    std::env::var("DESVAN_IO_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(IO_THREADS).clamp(1, 64)
+}
+
+fn chunk_records() -> u64 {
+    std::env::var("DESVAN_CHUNK").ok().and_then(|v| v.parse().ok()).unwrap_or(CHUNK_RECORDS)
+}
+
+/// Nanosegundos acumulados (entre todos los hilos) leyendo y analizando: para medir.
+pub static IO_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static PARSE_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Registro del directorio raíz.
 pub const ROOT_RECORD: u64 = 5;
 /// Registro de `$Extend`.
@@ -171,6 +187,17 @@ fn process_record(rec_no: u64, rec: &mut [u8], cluster: u64, out: &mut ChunkOut)
     }
 }
 
+/// Lee `len` bytes en `offset` respetando la alineación que exija el origen (lecturas sin caché).
+fn read_exact_aligned(src: &dyn Source, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+    let a = src.alignment().max(1) as u64;
+    let start = offset / a * a;
+    let end = (offset + len as u64).div_ceil(a) * a;
+    let mut buf = AlignedBuf::new((end - start) as usize, a as usize);
+    src.read_at(start, &mut buf)?;
+    let o = (offset - start) as usize;
+    Ok(buf[o..o + len].to_vec())
+}
+
 /// Byte del volumen donde empieza el VCN dado de la MFT, si está asignado.
 fn vcn_to_offset(runs: &[Run], vcn: u64, cluster: u64) -> Option<u64> {
     let r = runs.iter().find(|r| vcn >= r.vcn && vcn < r.vcn + r.clusters)?;
@@ -187,7 +214,8 @@ fn read_nonresident(src: &dyn Source, runs: &[Run], size: u64, cluster: u64) -> 
         }
         let bytes = (r.clusters * cluster).min(size - done);
         if let Some(lcn) = r.lcn {
-            src.read_at(lcn * cluster, &mut out[done as usize..(done + bytes) as usize])?;
+            let part = read_exact_aligned(src, lcn * cluster, bytes as usize)?;
+            out[done as usize..(done + bytes) as usize].copy_from_slice(&part);
         }
         done += bytes;
     }
@@ -212,8 +240,7 @@ fn attr_runs(rec: &[u8], at: usize) -> Result<(Vec<Run>, u64, u64)> {
 /// Lee el registro 0 y reconstruye dónde está toda la MFT.
 fn mft_layout(src: &dyn Source, boot: &Boot) -> Result<MftLayout> {
     let rs = boot.record_size as usize;
-    let mut rec0 = vec![0u8; rs];
-    src.read_at(boot.mft_lcn * boot.cluster, &mut rec0)?;
+    let mut rec0 = read_exact_aligned(src, boot.mft_lcn * boot.cluster, rs)?;
     if !record::apply_fixups(&mut rec0) {
         return Err(Error::Corrupt("el registro 0 de la MFT está dañado".into()));
     }
@@ -266,8 +293,7 @@ fn mft_layout(src: &dyn Source, boot: &Boot) -> Result<MftLayout> {
             let vcn = rec_no * boot.record_size as u64 / boot.cluster;
             let off = vcn_to_offset(&runs, vcn, boot.cluster).ok_or_else(|| Error::Corrupt("extensión de la $MFT inalcanzable".into()))?
                 + (rec_no * boot.record_size as u64) % boot.cluster;
-            let mut rec = vec![0u8; rs];
-            src.read_at(off, &mut rec)?;
+            let mut rec = read_exact_aligned(src, off, rs)?;
             if !record::apply_fixups(&mut rec) {
                 continue;
             }
@@ -310,6 +336,7 @@ fn bit(bitmap: &[u8], i: u64) -> bool {
 /// Trocea la MFT en bloques contiguos en disco, saltando las zonas sin registros en uso.
 fn plan_jobs(layout: &MftLayout, boot: &Boot) -> Vec<Job> {
     let rs = boot.record_size as u64;
+    let chunk = chunk_records();
     let per_cluster = (boot.cluster / rs).max(1);
     let mut jobs = Vec::new();
     for r in &layout.runs {
@@ -333,7 +360,7 @@ fn plan_jobs(layout: &MftLayout, boot: &Boot) -> Vec<Job> {
                     continue;
                 }
             }
-            let mut count = (end - i).min(CHUNK_RECORDS);
+            let mut count = (end - i).min(chunk);
             // recorta la cola libre del bloque
             if let Some(bm) = &layout.bitmap {
                 while count > 1 && !bit(bm, i + count - 1) {
@@ -348,14 +375,49 @@ fn plan_jobs(layout: &MftLayout, boot: &Boot) -> Vec<Job> {
     jobs
 }
 
+/// Solo lectura (sin analizar) de toda la MFT, para medir el techo de E/S.
+/// Devuelve (bytes leídos, milisegundos).
+pub fn read_bench(src: &dyn Source, threads: usize, block: usize) -> Result<(u64, u64)> {
+    let head = read_exact_aligned(src, 0, 4096)?;
+    let boot = Boot::parse(&head)?;
+    let layout = mft_layout(src, &boot)?;
+    let total = layout.total_records * boot.record_size as u64;
+    let mut pieces: Vec<(u64, usize)> = Vec::new();
+    let mut done = 0u64;
+    for r in &layout.runs {
+        let Some(lcn) = r.lcn else { continue };
+        let mut off = lcn * boot.cluster;
+        let mut left = (r.clusters * boot.cluster).min(total.saturating_sub(done));
+        done += left;
+        while left > 0 {
+            let n = left.min(block as u64);
+            pieces.push((off, n as usize));
+            off += n;
+            left -= n;
+        }
+    }
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().map_err(|e| Error::Corrupt(e.to_string()))?;
+    let t0 = Instant::now();
+    let a = src.alignment().max(1);
+    let bytes: u64 = pool.install(|| {
+        pieces
+            .par_iter()
+            .map(|&(off, n)| {
+                let len = n.div_ceil(a) * a;
+                let mut buf = AlignedBuf::new(len, a);
+                src.read_at(off, &mut buf).map(|_| n as u64).unwrap_or(0)
+            })
+            .sum()
+    });
+    Ok((bytes, ms(t0.elapsed())))
+}
+
 /// Escanea un volumen NTFS a partir de su origen de bytes.
 pub fn scan(src: &dyn Source, root_path: &str, progress: &Progress) -> Result<Scan> {
     let t0 = Instant::now();
     progress.set_phase(Phase::Starting);
-    let mut head = vec![0u8; 4096];
-    src.read_at(0, &mut head[..512])?;
-    // algunos volúmenes con sectores de 4 KB exigen leer el sector completo
-    let _ = src.read_at(0, &mut head);
+    // 4 KB: un sector completo también en discos de sectores de 4K
+    let head = read_exact_aligned(src, 0, 4096)?;
     let boot = Boot::parse(&head)?;
     if boot.cluster < boot.record_size as u64 && boot.record_size as u64 % boot.cluster != 0 {
         return Err(Error::Corrupt("geometría no soportada".into()));
@@ -370,19 +432,30 @@ pub fn scan(src: &dyn Source, root_path: &str, progress: &Progress) -> Result<Sc
     progress.set_phase(Phase::Reading);
 
     let rs = boot.record_size as usize;
-    let threads = rayon::current_num_threads();
+    let threads = io_threads();
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("mft-{i}")).build().map_err(|e| Error::Corrupt(e.to_string()))?;
     let t_read = Instant::now();
-    let results: Vec<Result<ChunkOut>> = jobs
+    let results: Vec<Result<ChunkOut>> = pool.install(|| jobs
         .par_iter()
         .map(|job| -> Result<ChunkOut> {
             if progress.cancelled() {
                 return Err(Error::Cancelled);
             }
-            let mut buf = vec![0u8; job.count as usize * rs];
-            src.read_at(job.offset, &mut buf)?;
-            progress.bytes.fetch_add(buf.len() as u64, Ordering::Relaxed);
+            // ventana alineada que contiene el bloque (para lecturas sin caché)
+            let a = src.alignment().max(1) as u64;
+            let len = job.count * rs as u64;
+            let start = job.offset / a * a;
+            let end = (job.offset + len).div_ceil(a) * a;
+            let mut buf = AlignedBuf::new((end - start) as usize, a as usize);
+            let t_io = Instant::now();
+            src.read_at(start, &mut buf)?;
+            IO_NS.fetch_add(t_io.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            let t_parse = Instant::now();
+            progress.bytes.fetch_add(len, Ordering::Relaxed);
+            let skip = (job.offset - start) as usize;
+            let data = &mut buf[skip..skip + len as usize];
             let mut out = ChunkOut { builder: Builder::with_capacity(job.count as usize), ..Default::default() };
-            for (k, rec) in buf.chunks_exact_mut(rs).enumerate() {
+            for (k, rec) in data.chunks_exact_mut(rs).enumerate() {
                 let rec_no = job.first + k as u64;
                 if let Some(bm) = &layout.bitmap {
                     if !bit(bm, rec_no) {
@@ -391,11 +464,13 @@ pub fn scan(src: &dyn Source, root_path: &str, progress: &Progress) -> Result<Sc
                 }
                 process_record(rec_no, rec, boot.cluster, &mut out);
             }
+            PARSE_NS.fetch_add(t_parse.elapsed().as_nanos() as u64, Ordering::Relaxed);
             progress.done.fetch_add(out.records, Ordering::Relaxed);
             progress.files.fetch_add(out.files, Ordering::Relaxed);
             Ok(out)
         })
-        .collect();
+        .collect());
+    drop(pool);
     let read_ms = ms(t_read.elapsed());
     if progress.cancelled() {
         return Err(Error::Cancelled);

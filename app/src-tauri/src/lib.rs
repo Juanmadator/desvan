@@ -1,5 +1,6 @@
 //! Backend de la app: el árbol vive en Rust y la interfaz le pide solo lo que muestra.
 
+mod bridge;
 mod commands;
 mod state;
 

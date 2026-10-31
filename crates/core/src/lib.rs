@@ -3,9 +3,14 @@
 //! - [`ntfs`]: lector directo de la MFT de un volumen NTFS (el método rápido).
 //! - [`tree`]: árbol compacto común a todos los escáneres.
 
+pub mod categories;
+pub mod dupes;
+pub mod junk;
+pub mod layout;
 pub mod ntfs;
 pub mod tree;
 pub mod util;
+pub mod walk;
 #[cfg(windows)]
 pub mod win;
 

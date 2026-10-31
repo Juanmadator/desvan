@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Desván · Laboratorio del treemap</title>
+  </head>
+  <body>
+    <div class="lab">
+      <header class="topbar">
+        <div class="brand">
+          <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 11.2 12 4l9 7.2V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+            <rect x="7.5" y="12" width="4" height="5" rx="0.8" fill="currentColor" opacity="0.9" />
+            <rect x="12.5" y="12" width="4" height="2.4" rx="0.8" fill="currentColor" opacity="0.55" />
+            <rect x="12.5" y="15.4" width="4" height="1.6" rx="0.6" fill="currentColor" opacity="0.35" />
+          </svg>
+          <span class="name">Desván</span>
+          <span class="tag">laboratorio del treemap</span>
+        </div>
+        <nav class="crumbs" id="crumbs" aria-label="Ruta"></nav>
+        <div class="usage" id="usage"></div>
+      </header>
+      <main class="main">
+        <section class="stage" id="stage">
+          <canvas id="map" aria-label="Mapa del disco"></canvas>
+          <div class="tip" id="tip" role="tooltip"></div>
+        </section>
+        <aside class="side">
+          <section class="card sel" id="sel"></section>
+          <section class="card legend">
+            <h2>Categorías</h2>
+            <ul id="legend"></ul>
+          </section>
+          <p class="hint">Doble clic: entrar · Clic derecho o Retroceso: subir · Clic: seleccionar</p>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/src/lab/treemap-lab.ts"></script>
+  </body>
+</html>

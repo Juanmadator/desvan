@@ -194,18 +194,6 @@ impl Tree {
     }
 }
 
-fn ext_of(name: &str) -> Option<&str> {
-    let dot = name.rfind('.')?;
-    if dot == 0 || dot + 1 == name.len() {
-        return None;
-    }
-    let e = &name[dot + 1..];
-    if e.len() > 12 || e.contains(' ') {
-        return None;
-    }
-    Some(e)
-}
-
 fn build_tree(b: Builder, root_key: u64, root_name: &str) -> Tree {
     let Builder { mut names, entries } = b;
     // nodos: 0 = raíz (sintética si el escáner no la aportó), luego las entradas, luego "huérfanos"
@@ -461,34 +449,51 @@ fn build_tree(b: Builder, root_key: u64, root_name: &str) -> Tree {
         });
     }
 
-    // extensiones
-    let mut exts: Vec<String> = vec![String::new()];
-    let mut ext_ids: HashMap<String, u16> = HashMap::new();
-    let mut ext = vec![0u16; n_nodes];
-    for i in 0..n_nodes {
+    // extensiones: la extensión en minúsculas cabe en un u128 (hasta 12 bytes + longitud),
+    // así se agrupan sin crear un String por archivo
+    let ext_key = |i: usize| -> u128 {
         if flg[i] & flags::DIR != 0 {
-            continue;
+            return 0;
         }
         let o = name_off[i] as usize;
-        let nm = std::str::from_utf8(&names[o..o + name_len[i] as usize]).unwrap_or("");
-        if let Some(e) = ext_of(nm) {
-            let lower = e.to_ascii_lowercase();
-            let id = match ext_ids.get(&lower) {
-                Some(&id) => id,
-                None => {
-                    if exts.len() >= u16::MAX as usize {
-                        0
-                    } else {
-                        let id = exts.len() as u16;
-                        exts.push(lower.clone());
-                        ext_ids.insert(lower, id);
-                        id
-                    }
-                }
-            };
-            ext[i] = id;
+        let nm = &names[o..o + name_len[i] as usize];
+        let Some(dot) = nm.iter().rposition(|&b| b == b'.') else { return 0 };
+        let e = &nm[dot + 1..];
+        if dot == 0 || e.is_empty() || e.len() > 12 || e.contains(&b' ') || std::str::from_utf8(e).is_err() {
+            return 0;
         }
+        let mut k: u128 = e.len() as u128;
+        for (j, &b) in e.iter().enumerate() {
+            k |= (b.to_ascii_lowercase() as u128) << (8 * (j + 1));
+        }
+        k
+    };
+    let keys: Vec<u128> = (0..n_nodes).into_par_iter().map(ext_key).collect();
+    let mut exts: Vec<String> = vec![String::new()];
+    let mut ext_ids: HashMap<u128, u16> = HashMap::new();
+    let mut ext = vec![0u16; n_nodes];
+    for (i, &k) in keys.iter().enumerate() {
+        if k == 0 {
+            continue;
+        }
+        let id = match ext_ids.get(&k) {
+            Some(&id) => id,
+            None => {
+                if exts.len() >= u16::MAX as usize {
+                    0
+                } else {
+                    let len = (k & 0xFF) as usize;
+                    let bytes: Vec<u8> = (0..len).map(|j| (k >> (8 * (j + 1))) as u8).collect();
+                    let id = exts.len() as u16;
+                    exts.push(String::from_utf8_lossy(&bytes).into_owned());
+                    ext_ids.insert(k, id);
+                    id
+                }
+            }
+        };
+        ext[i] = id;
     }
+    drop(keys);
 
     Tree {
         parent,

@@ -119,8 +119,69 @@ fn main() -> Result<()> {
                 print_top(t, a.top);
             }
         }
+        #[cfg(windows)]
+        "bench" => {
+            // compara lectura con caché y sin caché en el mismo proceso
+            let target = a.target.clone().context("indica una unidad (C:)")?;
+            let letter = target.chars().next().context("unidad vacía")?;
+            let root = format!("{}:\\", letter.to_ascii_uppercase());
+            let mut results = Vec::new();
+            let modes: Vec<bool> = match std::env::var("DESVAN_MODE").as_deref() {
+                Ok("sin") => vec![true],
+                Ok("con") => vec![false],
+                _ => vec![true, false],
+            };
+            for unbuffered in modes {
+                for i in 0..a.repeat {
+                    let src = FileSource::open_volume_with(letter, unbuffered)?;
+                    ntfs::scan::IO_NS.store(0, std::sync::atomic::Ordering::Relaxed);
+                    ntfs::scan::PARSE_NS.store(0, std::sync::atomic::Ordering::Relaxed);
+                    let t0 = Instant::now();
+                    let s = ntfs::scan(&src, &root, &Progress::default())?;
+                    let io = ntfs::scan::IO_NS.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000;
+                    let parse = ntfs::scan::PARSE_NS.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000;
+                    eprintln!("    hilos-ms en E/S: {io}, analizando: {parse} (suma de todos los hilos)");
+                    let ms = t0.elapsed().as_millis() as u64;
+                    let gbs = s.stats.bytes_read as f64 / 1e9 / (s.stats.read_ms.max(1) as f64 / 1000.0);
+                    eprintln!(
+                        "{} pasada {}: total {} ms (lectura {} ms a {:.2} GB/s, árbol {} ms) — {} archivos",
+                        if unbuffered { "sin caché" } else { "con caché" },
+                        i + 1,
+                        ms,
+                        s.stats.read_ms,
+                        gbs,
+                        s.stats.build_ms,
+                        s.stats.files
+                    );
+                    results.push(serde_json::json!({"unbuffered": unbuffered, "ms": ms, "read_ms": s.stats.read_ms, "build_ms": s.stats.build_ms, "gbs": gbs, "files": s.stats.files, "nodes": s.tree.len()}));
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&results)?);
+        }
+        #[cfg(windows)]
+        "readbench" => {
+            // desvan readbench C: → prueba combinaciones de hilos y bloque, sin analizar
+            let target = a.target.clone().context("indica una unidad (C:)")?;
+            let letter = target.chars().next().context("unidad vacía")?;
+            for unbuffered in [true, false] {
+                for &(threads, block_mb) in &[(1usize, 4usize), (4, 4), (8, 4), (16, 4), (32, 4), (8, 1), (32, 1), (8, 16), (4, 64)] {
+                    let src = FileSource::open_volume_with(letter, unbuffered)?;
+                    let (bytes, ms) = ntfs::scan::read_bench(&src, threads, block_mb << 20)?;
+                    eprintln!(
+                        "{:9} hilos {:>2} bloque {:>2} MB: {:.2} GB en {} ms → {:.2} GB/s",
+                        if unbuffered { "sin caché" } else { "con caché" },
+                        threads,
+                        block_mb,
+                        bytes as f64 / 1e9,
+                        ms,
+                        bytes as f64 / 1e9 / (ms.max(1) as f64 / 1000.0)
+                    );
+                }
+            }
+        }
         _ => {
-            println!("uso: desvan scan <C:> | --image <archivo.img> [--top N] [--json] [--repeat N]");
+            println!("uso: desvan scan <C:> | --image <archivo.img> [--top N] [--json] [--repeat N]
+     desvan bench <C:> [--repeat N]");
         }
     }
     Ok(())
